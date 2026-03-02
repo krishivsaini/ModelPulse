@@ -1,0 +1,19 @@
+# =============================================================================
+# ModelPulse — Python Dependencies
+# =============================================================================
+#
+# WHY SO FEW DEPENDENCIES:
+# One of the cleanest things about this architecture is that the entire async
+# execution layer (ThreadPoolExecutor, threading.Lock, concurrent.futures) is
+# part of Python's standard library.  Zero async framework dependencies means:
+#   - No version conflicts between asyncio libraries
+#   - No extra services to install (no Redis, no RabbitMQ, no Celery broker)
+#   - Anyone can clone this repo and run it with just `pip install -r requirements.txt`
+# This is intentional: MUIOGO evaluators should be able to run the demo in
+# under 60 seconds, not fight with infrastructure setup.
+
+Flask
+
+# gunicorn — for production deployment (WSGI HTTP server), not needed for local dev
+# Uncomment when deploying to a server:
+# gunicorn

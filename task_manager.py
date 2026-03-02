@@ -44,6 +44,7 @@ import copy
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from mock_model import run_model
@@ -102,6 +103,15 @@ def _blank_task(task_id: str, scenario: str) -> Dict:
         "epsilon_history": [],
         "results": None,
         "error": None,
+        # WHY start_time IS RECORDED HERE (not when the model starts running):
+        # The MUIOGO API contract requires a start_time in every status response.
+        # We record it at task *creation* — not when the executor picks it up —
+        # because from the user's perspective, they clicked "Run" at this moment.
+        # If the executor is busy (all 4 workers occupied), the task sits in the
+        # queue.  Recording start_time here means the timestamp reflects user
+        # intent, not executor availability.  This matches how AWS Batch reports
+        # "submitted at" vs "started at".
+        "start_time": datetime.now(timezone.utc).isoformat(),
     }
 
 
