@@ -112,6 +112,18 @@ def _blank_task(task_id: str, scenario: str) -> Dict:
         # intent, not executor availability.  This matches how AWS Batch reports
         # "submitted at" vs "started at".
         "start_time": datetime.now(timezone.utc).isoformat(),
+        # WHY metadata IS INITIALIZED WITH DEFAULTS HERE:
+        # The MUIOGO API contract (confirmed by NamanmeetSingh) requires a
+        # metadata block in every status response.  Initializing it at task
+        # creation ensures the response shape is always valid — even before
+        # the first iteration callback fires.  track1_iteration and
+        # current_epsilon are mirrored from top-level fields on each callback;
+        # dampening_alpha is a solver constant that doesn't change during a run.
+        "metadata": {
+            "track1_iteration": 0,
+            "current_epsilon": None,
+            "dampening_alpha": 0.2,
+        },
     }
 
 
@@ -222,6 +234,11 @@ def _run_task(task_id: str, scenario: str) -> None:
             task["epsilon"] = progress.get("epsilon", task["epsilon"])
             task["progress_pct"] = progress.get("progress_pct", task["progress_pct"])
             task["epsilon_history"] = progress.get("epsilon_history", task["epsilon_history"])
+
+            # Mirror iteration and epsilon into the metadata block so the
+            # MUIOGO contract response always carries up-to-date solver state.
+            task["metadata"]["track1_iteration"] = task["iteration"]
+            task["metadata"]["current_epsilon"] = task["epsilon"]
 
     try:
         # WHY SET "running" BEFORE the model call:

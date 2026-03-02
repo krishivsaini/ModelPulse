@@ -217,6 +217,7 @@ def api_status(task_id):
         "logs":       _build_logs(task),
         "result":     task["results"] if task["status"] == "completed" else None,
         "start_time": task.get("start_time"),
+        "metadata":   task.get("metadata"),
 
         # ── Extra fields for ModelPulse frontend ──
         "iteration":       task["iteration"],
