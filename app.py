@@ -254,7 +254,7 @@ def running(task_id):
     task = get_task(task_id)
     if task is None:
         return redirect(url_for("index"))
-    return render_template("running.html", task_id=task_id)
+    return render_template("running.html", task_id=task_id, scenario=task["scenario"])
 
 
 @app.route("/results/<task_id>")
@@ -273,7 +273,7 @@ def results(task_id):
         return redirect(url_for("index"))
     if task["status"] != "completed":
         return redirect(url_for("running", task_id=task_id))
-    return render_template("results.html", task_id=task_id)
+    return render_template("results.html", task=task, result=task["results"])
 
 
 # ---------------------------------------------------------------------------

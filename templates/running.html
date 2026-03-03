@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ModelPulse — Running {{ scenario }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <!--
+        WHY LOAD PLOTLY FROM CDN (not npm, not local):
+        ModelPulse is a Flask/Jinja2 app — there's no JS build step (webpack,
+        vite).  Loading Plotly from a CDN is the simplest way to get a
+        production-quality charting library without introducing a bundler.
+        The pinned version (2.26.0) prevents surprise breaking changes.
+    -->
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+</head>
+
+<body>
+    <header class="site-header">
+        <div class="container">
+            <h1>ModelPulse</h1>
+            <p class="subtitle">UN MUIOGO Simulation Dashboard</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="results-header">
+            <div>
+                <h2 class="page-title">Simulation in Progress</h2>
+                <p class="page-description">
+                    Scenario: <strong>{{ scenario }}</strong> ·
+                    Task ID: <code>{{ task_id }}</code>
+                </p>
+            </div>
+            <span class="status-badge status-badge--running" id="status-badge">RUNNING</span>
+        </div>
+
+        <!-- ── Live metrics panel ────────────────────────────────────────── -->
+        <div class="progress-panel">
+            <h2>Solver Status</h2>
+            <div class="metrics-grid">
+                <div class="metric">
+                    <div class="metric-label">Iteration</div>
+                    <div class="metric-value" id="metric-iteration">—</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Convergence (ε)</div>
+                    <div class="metric-value" id="metric-epsilon">—</div>
+                </div>
+                <div class="metric">
+                    <!--
+                        WHY TOOLTIP ON DAMPENING α:
+                        Policymakers seeing "Dampening α = 0.2" have no idea
+                        what it means.  A tooltip provides context without
+                        cluttering the panel.  The tooltip text was reviewed
+                        by the Track 1 backend contributor (NamanmeetSingh).
+                    -->
+                    <div class="metric-label">
+                        <span class="tooltip-trigger"
+                            data-tooltip="Controls how aggressively the solver updates between iterations">Dampening
+                            α</span>
+                    </div>
+                    <div class="metric-value" id="metric-alpha">—</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Started At</div>
+                    <div class="metric-value" id="metric-start-time" style="font-size: 1rem;">—</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Error banner (hidden by default) ─────────────────────────── -->
+        <div class="error-banner" id="error-banner" style="display:none;">
+            An error occurred during the simulation. See the logs below for details.
+        </div>
+
+        <!-- ── Live convergence chart ────────────────────────────────────── -->
+        <div class="chart-container">
+            <h3>Convergence History (ε vs. Iteration)</h3>
+            <div id="convergence-chart" style="width:100%;height:320px;"></div>
+        </div>
+
+        <!-- ── Live log panel ────────────────────────────────────────────── -->
+        <div class="log-panel" id="log-panel">
+            <!-- Log entries appended here by JS -->
+        </div>
+
+        <a href="/" class="btn btn--secondary" id="back-btn" style="display:none;">← Run Another Scenario</a>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            ModelPulse — GSoC 2026 · UN OICT MUIOGO Program
+        </div>
+    </footer>
+
+    <script>
+        (function () {
+            'use strict';
+
+            // ── Configuration ───────────────────────────────────────────────
+            var TASK_ID = '{{ task_id }}';
+            var POLL_MS = 2000;
+            var pollTimer = null;
+
+            // ── DOM references ──────────────────────────────────────────────
+            var elIteration = document.getElementById('metric-iteration');
+            var elEpsilon = document.getElementById('metric-epsilon');
+            var elAlpha = document.getElementById('metric-alpha');
+            var elStartTime = document.getElementById('metric-start-time');
+            var elBadge = document.getElementById('status-badge');
+            var elLogPanel = document.getElementById('log-panel');
+            var elError = document.getElementById('error-banner');
+            var elBackBtn = document.getElementById('back-btn');
+            var elChart = document.getElementById('convergence-chart');
+
+            // ── Local accumulation arrays for the Plotly chart ──────────────
+            /*
+             * WHY ACCUMULATE LOCALLY (not read from the API response):
+             * The MUIOGO API contract returns metadata.current_epsilon — a single
+             * scalar for the *current* iteration, not a full history array.  To
+             * build a line chart of ε over iterations, we accumulate each polled
+             * value locally.  The backend *does* also return epsilon_history as a
+             * convenience field, but the polling UI must work even without it,
+             * since the real MUIOGO API won't have that extra field.
+             *
+             * TRADEOFF: if the user refreshes the page mid-run, the accumulated
+             * history is lost and the chart restarts from the current iteration.
+             * This is acceptable for a demo — in production you'd persist the
+             * history server-side (which our backend already does via
+             * epsilon_history, but we don't rely on it here to stay true to the
+             * MUIOGO contract).
+             */
+            var chartIterations = [];
+            var chartEpsilons = [];
+
+            // ── Track how many log entries we've already rendered ───────────
+            var renderedLogCount = 0;
+
+            // ── Initialize the Plotly chart with an empty trace ─────────────
+            Plotly.newPlot(elChart, [{
+                x: chartIterations,
+                y: chartEpsilons,
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'ε (convergence)',
+                line: { color: '#2c5282', width: 2 },
+                marker: { size: 5 }
+            }], {
+                xaxis: {
+                    title: 'Iteration',
+                    dtick: 1,
+                    rangemode: 'tozero'
+                },
+                yaxis: {
+                    title: 'Epsilon (ε)',
+                    rangemode: 'tozero'
+                },
+                margin: { t: 20, r: 30, b: 50, l: 60 },
+                font: { family: 'Segoe UI, system-ui, sans-serif', size: 12 }
+            }, {
+                responsive: true,
+                displayModeBar: false
+            });
+
+            // ── Format ISO 8601 → human-readable string ─────────────────────
+            /*
+             * WHY toLocaleString() (not a library like moment.js):
+             * toLocaleString() is built-in, respects the user's browser locale,
+             * and handles timezone conversion automatically.  Adding moment.js
+             * (or day.js) for a single date format would add ~7 KB gzipped for
+             * no benefit.
+             */
+            function formatTimestamp(isoString) {
+                if (!isoString) return '—';
+                var d = new Date(isoString);
+                return d.toLocaleString(undefined, {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+            }
+
+            // ── Poll function ───────────────────────────────────────────────
+            function poll() {
+                fetch('/api/status/' + TASK_ID)
+                    .then(function (response) {
+                        if (!response.ok) throw new Error('Status ' + response.status);
+                        return response.json();
+                    })
+                    .then(function (data) {
+                        updatePanel(data);
+                        updateLogs(data.logs || []);
+                        updateChart(data);
+                        checkTerminal(data);
+                    })
+                    .catch(function (err) {
+                        console.error('Poll error:', err);
+                        // Don't stop polling on transient network errors — the server
+                        // might be momentarily unreachable.  Only stop on terminal
+                        // states (handled in checkTerminal).
+                    });
+            }
+
+            // ── Update the live metrics panel ───────────────────────────────
+            function updatePanel(data) {
+                var meta = data.metadata || {};
+
+                // WHY READ FROM metadata.track1_iteration (not top-level iteration):
+                // The MUIOGO API contract places iteration inside the metadata
+                // block.  The top-level 'iteration' field is a ModelPulse extension
+                // that won't exist in the real UN system.
+                elIteration.textContent = 'Iteration ' + (meta.track1_iteration || 0);
+
+                // WHY FIXED 6 DECIMALS:
+                // Convergence epsilon values are small (e.g. 0.042178).  Showing
+                // all significant digits lets the user see the solver progressing
+                // even when changes are tiny.
+                var eps = meta.current_epsilon;
+                elEpsilon.textContent = eps !== null && eps !== undefined
+                    ? 'ε = ' + eps.toFixed(6)
+                    : '—';
+
+                var alpha = meta.dampening_alpha;
+                elAlpha.textContent = alpha !== null && alpha !== undefined
+                    ? alpha.toFixed(1)
+                    : '—';
+
+                elStartTime.textContent = formatTimestamp(data.start_time);
+            }
+
+            // ── Append new log entries (never re-render existing ones) ──────
+            /*
+             * WHY APPEND-ONLY (not innerHTML replace):
+             * Re-rendering the full log list on every poll causes two problems:
+             * 1. FLICKER — the browser re-paints the entire log panel, creating
+             *    a visible flash that distracts the user.
+             * 2. SCROLL POSITION LOSS — if the user scrolled up to read an
+             *    earlier entry, replacing innerHTML resets scrollTop to 0,
+             *    forcing them back to the bottom.  This is frustrating and
+             *    makes the log panel unusable during long runs.
+             *
+             * By tracking how many entries we've already rendered (renderedLogCount)
+             * and only appending *new* entries, we avoid both problems.  The DOM
+             * stays stable, scroll position is preserved, and the browser only
+             * paints the delta.
+             */
+            function updateLogs(logs) {
+                if (logs.length <= renderedLogCount) return;
+
+                for (var i = renderedLogCount; i < logs.length; i++) {
+                    var entry = document.createElement('div');
+                    entry.className = 'log-entry';
+                    entry.textContent = '▸ ' + logs[i];
+                    elLogPanel.appendChild(entry);
+                }
+
+                renderedLogCount = logs.length;
+
+                // Auto-scroll to bottom only if the user hasn't scrolled up
+                // WHY THIS CHECK:
+                // If scrollTop + clientHeight is close to scrollHeight, the user
+                // is at the bottom and wants to see new entries.  If they've
+                // scrolled up, we respect their position.
+                var nearBottom = elLogPanel.scrollHeight - elLogPanel.scrollTop - elLogPanel.clientHeight < 60;
+                if (nearBottom) {
+                    elLogPanel.scrollTop = elLogPanel.scrollHeight;
+                }
+            }
+
+            // ── Update the convergence chart ────────────────────────────────
+            function updateChart(data) {
+                var meta = data.metadata || {};
+                var iteration = meta.track1_iteration;
+                var eps = meta.current_epsilon;
+
+                // Only add a new point if we have a valid iteration that we
+                // haven't already charted
+                if (iteration && eps !== null && eps !== undefined) {
+                    // WHY CHECK FOR DUPLICATES:
+                    // If the poll fires twice before the solver advances, we'd
+                    // add the same point twice, causing a flat segment in the
+                    // chart.  Checking the last iteration prevents this.
+                    var lastIter = chartIterations.length > 0
+                        ? chartIterations[chartIterations.length - 1]
+                        : 0;
+
+                    if (iteration > lastIter) {
+                        chartIterations.push(iteration);
+                        chartEpsilons.push(eps);
+
+                        // WHY Plotly.extendTraces (not Plotly.react):
+                        // extendTraces appends data to an existing trace without
+                        // re-rendering the full chart.  This is O(1) per poll vs
+                        // O(n) for react/newPlot — critical when we're updating
+                        // every 2 seconds.
+                        Plotly.extendTraces(elChart, {
+                            x: [[iteration]],
+                            y: [[eps]]
+                        }, [0]);
+                    }
+                }
+            }
+
+            // ── Check for terminal states ───────────────────────────────────
+            function checkTerminal(data) {
+                var status = data.status;
+
+                if (status === 'Completed') {
+                    // WHY clearInterval BEFORE the redirect delay:
+                    // If we didn't clear, another poll would fire during the 1s
+                    // wait and could trigger a second redirect (race condition).
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+
+                    elBadge.textContent = 'COMPLETED';
+                    elBadge.className = 'status-badge status-badge--completed';
+
+                    // WHY 1-SECOND DELAY:
+                    // Give the user a moment to see the "COMPLETED" state before
+                    // whisking them away to results.  An instant redirect feels
+                    // jarring — the user doesn't know what happened.
+                    setTimeout(function () {
+                        window.location.href = '/results/' + TASK_ID;
+                    }, 1000);
+
+                } else if (status === 'Error') {
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+
+                    elBadge.textContent = 'ERROR';
+                    elBadge.className = 'status-badge status-badge--error';
+                    elError.style.display = 'block';
+                    elBackBtn.style.display = 'inline-flex';
+
+                } else if (status === 'Queued') {
+                    elBadge.textContent = 'QUEUED';
+                    elBadge.className = 'status-badge status-badge--queued';
+                }
+                // "Running" is the default badge state — no change needed.
+            }
+
+            // ── Start polling ───────────────────────────────────────────────
+            // WHY POLL IMMEDIATELY + setInterval (not just setInterval):
+            // setInterval fires after the first interval.  Polling immediately
+            // means the user sees data within milliseconds of page load, not
+            // after a 2-second blank wait.
+            poll();
+            pollTimer = setInterval(poll, POLL_MS);
+
+        })();
+    </script>
+</body>
+
+</html>

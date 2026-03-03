@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ModelPulse — Results for {{ task.scenario }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+</head>
+
+<body>
+    <header class="site-header">
+        <div class="container">
+            <h1>ModelPulse</h1>
+            <p class="subtitle">UN MUIOGO Simulation Dashboard</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="results-header">
+            <div>
+                <h2 class="page-title">Simulation Results</h2>
+                <p class="page-description">
+                    Scenario: <strong>{{ task.scenario }}</strong> ·
+                    Task ID: <code>{{ task.task_id }}</code>
+                </p>
+            </div>
+            <span class="status-badge status-badge--completed">COMPLETED</span>
+        </div>
+
+        <!-- ── Metadata row ──────────────────────────────────────────────── -->
+        <div class="results-meta">
+            <!--
+                WHY FORMAT start_time IN JS (not Jinja2):
+                Jinja2 renders on the server, which doesn't know the user's
+                timezone or locale.  Formatting in JS via toLocaleString()
+                respects the browser's locale and timezone settings, giving
+                each user a familiar date format automatically.
+            -->
+            <span><strong>Started:</strong> <span id="start-time">{{ task.start_time }}</span></span>
+            <span><strong>Iterations:</strong> {{ result.convergence.iterations_run }} of {{
+                result.convergence.max_iterations }}</span>
+            <span><strong>Final ε:</strong> {{ result.convergence.final_epsilon }}</span>
+            {% if result.convergence.converged_early %}
+            <span><strong>Converged early:</strong> Yes</span>
+            {% endif %}
+        </div>
+
+        <div class="charts-grid">
+
+            <!-- ── Chart 1: Convergence history ─────────────────────────── -->
+            <!--
+                WHY EPSILON HISTORY AS A LINE CHART (not a table):
+                Convergence is a *trajectory* — policymakers need to see whether
+                the solver approached the solution smoothly or oscillated.  A
+                line chart conveys this in a glance; a table of 15 numbers does
+                not.  This is standard practice in numerical methods reporting.
+            -->
+            <div class="chart-container">
+                <h3>Solver Convergence History</h3>
+                <p style="font-size:0.85rem;color:var(--color-text-muted);margin-bottom:12px;">
+                    Shows how the solver's error (ε) decreased over iterations until convergence.
+                </p>
+                <div id="chart-convergence" style="width:100%;height:320px;"></div>
+            </div>
+
+            <!-- ── Chart 2: Macroeconomic outputs ───────────────────────── -->
+            <!--
+                WHY ONLY GDP AND EMPLOYMENT (not all 4 macro fields):
+                The spec requests these two specific indicators.  Showing all 4
+                fields would clutter the chart for a policymaker audience.  The
+                full data is available in the JSON API for analysts who need it.
+            -->
+            <div class="chart-container">
+                <h3>Macroeconomic Outcomes</h3>
+                <p style="font-size:0.85rem;color:var(--color-text-muted);margin-bottom:12px;">
+                    Key economic indicators produced by the OG-Core macroeconomic model.
+                </p>
+                <div id="chart-macro" style="width:100%;height:320px;"></div>
+            </div>
+
+            <!-- ── Chart 3: Energy-climate outputs ──────────────────────── -->
+            <div class="chart-container">
+                <h3>Energy &amp; Climate Outcomes</h3>
+                <p style="font-size:0.85rem;color:var(--color-text-muted);margin-bottom:12px;">
+                    Key environmental indicators produced by the energy-climate model (OSeMOSYS/CLEWS).
+                </p>
+                <div id="chart-energy" style="width:100%;height:320px;"></div>
+            </div>
+
+        </div>
+
+        <div style="margin-top:16px;">
+            <a href="/" class="btn">← Run Another Scenario</a>
+        </div>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            ModelPulse — GSoC 2026 · UN OICT MUIOGO Program
+        </div>
+    </footer>
+
+    <script>
+        (function () {
+            'use strict';
+
+            // ── Format the start_time to user's locale ──────────────────────
+            var startTimeEl = document.getElementById('start-time');
+            var raw = startTimeEl.textContent;
+            if (raw) {
+                var d = new Date(raw);
+                startTimeEl.textContent = d.toLocaleString(undefined, {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+            }
+
+            /*
+             * WHY PASS DATA VIA Jinja2 tojson FILTER (not a separate API call):
+             * The results page is only rendered once (no polling).  The data is
+             * already available in the Jinja2 context from the Flask route.
+             * Making a separate fetch() call would add latency and a loading
+             * state for zero benefit.  tojson|safe is the standard Jinja2 pattern
+             * for passing server data to inline JS.
+             */
+            var epsilonHistory = {{ task.epsilon_history | tojson
+        }};
+        var macro = {{ result.macro | tojson }};
+        var energyClimate = {{ result.energy_climate | tojson }};
+
+        // ── Chart 1: Convergence line chart ─────────────────────────────
+        /*
+         * WHY CHECK FOR EMPTY epsilon_history (defensive fallback):
+         * task_manager.py appends each epsilon value server-side, so this
+         * array should always be populated for completed tasks.  But if
+         * someone runs against the real MUIOGO API (which only sends
+         * metadata.current_epsilon per poll and has no server-side history),
+         * epsilon_history could be empty.  In that case we show a helpful
+         * note instead of an empty chart.
+         */
+        if (epsilonHistory.length > 0) {
+            var iterations = epsilonHistory.map(function (_, i) { return i + 1; });
+
+            Plotly.newPlot('chart-convergence', [{
+                x: iterations,
+                y: epsilonHistory,
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'ε (solver error)',
+                line: { color: '#2c5282', width: 2 },
+                marker: { size: 5 }
+            }], {
+                xaxis: { title: 'Iteration', dtick: 1 },
+                yaxis: { title: 'Epsilon (ε)', rangemode: 'tozero' },
+                margin: { t: 20, r: 30, b: 50, l: 60 },
+                font: { family: 'Segoe UI, system-ui, sans-serif', size: 12 }
+            }, { responsive: true, displayModeBar: false });
+        } else {
+            document.getElementById('chart-convergence').innerHTML =
+                '<p style="color:var(--color-text-muted);padding:40px;text-align:center;">' +
+                'Convergence data recorded during live run only. ' +
+                'View the running page during a simulation to see the real-time convergence chart.</p>';
+        }
+
+        // ── Chart 2: Macro outcomes (bar) ───────────────────────────────
+        /*
+         * WHY SEPARATE BARS (not grouped):
+         * GDP Growth and Employment Rate have very different scales (2%
+         * vs 95%).  Putting them on the same y-axis would make GDP
+         * invisible.  Plotly's bar chart with text labels on each bar
+         * solves this — the absolute scale is less important than the
+         * labeled value.
+         */
+        Plotly.newPlot('chart-macro', [{
+            x: ['GDP Growth', 'Employment Rate'],
+            y: [macro.gdp_growth_pct, macro.employment_rate_pct],
+            type: 'bar',
+            marker: { color: ['#2c5282', '#2b6cb0'] },
+            text: [
+                macro.gdp_growth_pct.toFixed(1) + '%',
+                macro.employment_rate_pct.toFixed(1) + '%'
+            ],
+            textposition: 'outside',
+            hoverinfo: 'x+y'
+        }], {
+            yaxis: { title: 'Percentage (%)', rangemode: 'tozero' },
+            margin: { t: 20, r: 30, b: 50, l: 60 },
+            font: { family: 'Segoe UI, system-ui, sans-serif', size: 12 },
+            bargap: 0.4
+        }, { responsive: true, displayModeBar: false });
+
+        // ── Chart 3: Energy-climate outcomes (bar) ──────────────────────
+        Plotly.newPlot('chart-energy', [{
+            x: ['Carbon Emissions', 'Renewable Energy Share'],
+            y: [energyClimate.emissions_mtco2, energyClimate.renewable_share_pct],
+            type: 'bar',
+            marker: { color: ['#c53030', '#276749'] },
+            text: [
+                energyClimate.emissions_mtco2.toFixed(1) + ' MtCO₂',
+                energyClimate.renewable_share_pct.toFixed(1) + '%'
+            ],
+            textposition: 'outside',
+            hoverinfo: 'x+y'
+        }], {
+            yaxis: { title: 'Value', rangemode: 'tozero' },
+            margin: { t: 20, r: 30, b: 50, l: 60 },
+            font: { family: 'Segoe UI, system-ui, sans-serif', size: 12 },
+            bargap: 0.4
+        }, { responsive: true, displayModeBar: false });
+
+    }) ();
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ModelPulse — Run macroeconomic and energy-climate policy simulations powered by the UN MUIOGO framework.">
+    <title>ModelPulse — Scenario Selector</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="site-header">
+        <div class="container">
+            <h1>ModelPulse</h1>
+            <p class="subtitle">UN MUIOGO Simulation Dashboard</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <h2 class="page-title">Choose a Policy Scenario</h2>
+        <p class="page-description">
+            Select a scenario below to run a macroeconomic and energy-climate simulation.
+            Each run takes roughly 15–30 seconds in demo mode.
+        </p>
+
+        <!-- ── Scenario card grid ────────────────────────────────────────── -->
+        <!--
+            WHY 4 CARDS (not a dropdown):
+            Policy analysts compare scenarios visually — they need to see all
+            options at once with descriptions and key indicators, not a
+            collapsed dropdown that hides information.  Cards also provide a
+            natural click target for "Run Simulation".
+        -->
+        <div class="scenario-grid">
+
+            <!-- Baseline -->
+            <div class="scenario-card" id="card-baseline">
+                <h3>Baseline</h3>
+                <p class="card-description">
+                    Status-quo projection with no policy changes — the reference point for comparing all other scenarios.
+                </p>
+                <div class="indicators">
+                    <span class="indicator">GDP Growth ≈ 2.1%</span>
+                    <span class="indicator">Emissions ≈ 310 MtCO₂</span>
+                </div>
+                <button class="btn" onclick="runScenario('baseline', this)" id="btn-baseline">
+                    Run Simulation
+                </button>
+            </div>
+
+            <!-- Green Transition -->
+            <div class="scenario-card" id="card-green_transition">
+                <h3>Green Transition</h3>
+                <p class="card-description">
+                    Aggressive renewable-energy investment — emissions fall sharply, but short-term GDP growth dips.
+                </p>
+                <div class="indicators">
+                    <span class="indicator">Renewable Share ≈ 48.5%</span>
+                    <span class="indicator">Emissions ≈ 195 MtCO₂</span>
+                </div>
+                <button class="btn" onclick="runScenario('green_transition', this)" id="btn-green_transition">
+                    Run Simulation
+                </button>
+            </div>
+
+            <!-- Fiscal Reform -->
+            <div class="scenario-card" id="card-fiscal_reform">
+                <h3>Fiscal Reform</h3>
+                <p class="card-description">
+                    Tax-system restructuring boosts revenue and growth, but energy and emissions stay roughly flat.
+                </p>
+                <div class="indicators">
+                    <span class="indicator">GDP Growth ≈ 2.8%</span>
+                    <span class="indicator">Tax Revenue ≈ 21.6% of GDP</span>
+                </div>
+                <button class="btn" onclick="runScenario('fiscal_reform', this)" id="btn-fiscal_reform">
+                    Run Simulation
+                </button>
+            </div>
+
+            <!-- Mixed Policy -->
+            <div class="scenario-card" id="card-mixed_policy">
+                <h3>Mixed Policy</h3>
+                <p class="card-description">
+                    Balanced approach combining renewable investment with fiscal adjustments — tradeoffs are non-linear.
+                </p>
+                <div class="indicators">
+                    <span class="indicator">Renewable Share ≈ 35%</span>
+                    <span class="indicator">Employment ≈ 94.9%</span>
+                </div>
+                <button class="btn" onclick="runScenario('mixed_policy', this)" id="btn-mixed_policy">
+                    Run Simulation
+                </button>
+            </div>
+
+        </div>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            ModelPulse — GSoC 2026 · UN OICT MUIOGO Program
+        </div>
+    </footer>
+
+    <script>
+    /**
+     * runScenario — POST the selected scenario to /api/run and redirect on 202.
+     *
+     * WHY VANILLA fetch() (not axios, not jQuery.ajax):
+     * fetch() is built into every modern browser — zero dependencies.  For a
+     * single POST request, adding a library would be overhead.  The pattern
+     * here (check response.ok, parse JSON, redirect) is idiomatic fetch usage
+     * that any interviewer would recognise.
+     */
+    function runScenario(scenario, buttonEl) {
+        // ── Show loading state on the clicked button ──
+        // WHY DISABLE ALL BUTTONS (not just the clicked one):
+        // If the user rapidly clicks two different scenarios, we'd get two
+        // concurrent runs.  Disabling all buttons prevents double-submission.
+        var allButtons = document.querySelectorAll('.scenario-card .btn');
+        allButtons.forEach(function(btn) { btn.disabled = true; });
+
+        // Replace button text with spinner + "Starting…"
+        var originalText = buttonEl.textContent;
+        buttonEl.innerHTML = '<span class="spinner"></span> Starting…';
+
+        fetch('/api/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scenario: scenario })
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                // WHY THROW ON NON-OK:
+                // fetch() doesn't reject on HTTP errors (4xx, 5xx) — it only
+                // rejects on network failures.  We need to manually check
+                // response.ok to catch validation errors (400) or server
+                // errors (500).  Throwing sends control to the .catch() block.
+                throw new Error('Server responded with status ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            // WHY CHECK FOR task_id (defensive):
+            // If the API contract changes or the server returns an unexpected
+            // shape, we want a clear error, not a silent redirect to
+            // "/running/undefined".
+            if (!data.task_id) {
+                throw new Error('Response missing task_id');
+            }
+            // Redirect to the live-progress page
+            window.location.href = '/running/' + data.task_id;
+        })
+        .catch(function(err) {
+            // ── Restore button state so the user can retry ──
+            alert('Failed to start simulation: ' + err.message);
+            buttonEl.textContent = originalText;
+            allButtons.forEach(function(btn) { btn.disabled = false; });
+        });
+    }
+    </script>
+</body>
+</html>

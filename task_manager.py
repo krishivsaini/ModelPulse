@@ -233,7 +233,17 @@ def _run_task(task_id: str, scenario: str) -> None:
             task["max_iterations"] = progress.get("max_iterations", task["max_iterations"])
             task["epsilon"] = progress.get("epsilon", task["epsilon"])
             task["progress_pct"] = progress.get("progress_pct", task["progress_pct"])
-            task["epsilon_history"] = progress.get("epsilon_history", task["epsilon_history"])
+
+            # WHY APPEND (not replace the whole list from the callback):
+            # mock_model sends a full epsilon_history array for convenience,
+            # but the real MUIOGO API only sends metadata.current_epsilon —
+            # a single scalar per poll.  By appending each epsilon value here,
+            # task_manager builds its own server-side history regardless of
+            # what the model sends.  This means results.html can always render
+            # the convergence chart from task.epsilon_history, even if the
+            # client-side accumulation from running.html is lost on refresh.
+            if progress.get("epsilon") is not None:
+                task["epsilon_history"].append(progress["epsilon"])
 
             # Mirror iteration and epsilon into the metadata block so the
             # MUIOGO contract response always carries up-to-date solver state.
