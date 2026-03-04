@@ -6,7 +6,7 @@ MUIOGO's OG-Core and CLEWS model runs take 15–20 minutes per scenario. During 
 
 ## Live Demo
 
-> 🔗 Deploy link coming — see [How to Run Locally](#how-to-run-locally) to run it now.
+> 🔗 Deploy link: https://modelpulse.onrender.com
 
 ## Architecture
 
