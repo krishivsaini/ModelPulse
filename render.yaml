@@ -1,0 +1,27 @@
+# =============================================================================
+# render.yaml — Render.com deployment blueprint for ModelPulse
+# =============================================================================
+#
+# This file lets Render auto-detect the service configuration when you connect
+# the repo.  It can also be used with `render blueprint apply` for CLI deploys.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: modelpulse
+    runtime: python
+    plan: free
+
+    # Build
+    buildCommand: pip install -r requirements.txt
+
+    # Start — gunicorn serves the Flask app via WSGI
+    #   --workers 2       : 2 processes (safe for 512 MB free tier RAM)
+    #   --threads 4       : 4 threads per worker to match ThreadPoolExecutor(max_workers=4)
+    #   --timeout 120     : extended timeout so model runs aren't killed mid-convergence
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.4"

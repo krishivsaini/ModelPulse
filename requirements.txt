@@ -14,6 +14,6 @@
 
 Flask
 
-# gunicorn — for production deployment (WSGI HTTP server), not needed for local dev
-# Uncomment when deploying to a server:
-# gunicorn
+# gunicorn — WSGI HTTP server for production deployment (Render, Heroku, etc.)
+# Not needed for local dev (python app.py uses Flask's built-in server).
+gunicorn
